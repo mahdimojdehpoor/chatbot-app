@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-چت‌بات هوش مصنوعی - نسخه گرافیکی شیک (Kivy)
-برای اجرا روی Pydroid3
-قبل از اجرا: از منوی Pip توی Pydroid3، پکیج kivy رو نصب کنید
+چت‌بات هوش مصنوعی - نسخه گرافیکی شیک (Kivy) با پشتیبانی از فونت فارسی
 """
 
 import requests
 import threading
+import arabic_reshaper
+from bidi.algorithm import get_display
+
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
@@ -15,6 +16,7 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.core.text import LabelBase
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 
@@ -22,16 +24,28 @@ from kivy.graphics import Color, RoundedRectangle
 # کلید API خودتون رو اینجا بذارید
 # از سایت console.groq.com بگیرید
 # ==========================================
-API_KEY = "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"
+API_KEY = "اینجا_کلید_API_رو_بذار"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # رنگ‌بندی
 BG_COLOR = (0.06, 0.07, 0.09, 1)
-USER_BUBBLE_COLOR = (0.15, 0.45, 0.85, 1)     # آبی
-BOT_BUBBLE_COLOR = (0.18, 0.19, 0.23, 1)       # خاکستری تیره
+USER_BUBBLE_COLOR = (0.15, 0.45, 0.85, 1)
+BOT_BUBBLE_COLOR = (0.18, 0.19, 0.23, 1)
 HEADER_COLOR = (0.1, 0.11, 0.14, 1)
 
 Window.clearcolor = BG_COLOR
+
+# ثبت فونت فارسی (فایل Vazirmatn-Regular.ttf باید کنار main.py باشه)
+LabelBase.register(name="Vazir", fn_regular="Vazirmatn-Regular.ttf")
+
+
+def fa(text):
+    """
+    متن فارسی رو برای نمایش درست توی Kivy آماده می‌کنه:
+    حروف رو به‌هم می‌چسبونه (reshape) و جهت راست‌به‌چپ رو اصلاح می‌کنه (bidi)
+    """
+    reshaped = arabic_reshaper.reshape(text)
+    return get_display(reshaped)
 
 
 class ChatBubble(BoxLayout):
@@ -46,12 +60,12 @@ class ChatBubble(BoxLayout):
         bubble_color = USER_BUBBLE_COLOR if is_user else BOT_BUBBLE_COLOR
 
         self.label = Label(
-            text=text,
+            text=fa(text),
+            font_name="Vazir",
             color=(1, 1, 1, 1),
             font_size=dp(15),
             halign="right",
             valign="middle",
-            markup=True,
             size_hint_y=None,
         )
         self.label.bind(
@@ -80,7 +94,7 @@ class ChatBubble(BoxLayout):
         self.bg_rect.size = self.size
 
     def set_text(self, new_text):
-        self.label.text = new_text
+        self.label.text = fa(new_text)
         self.label.texture_update()
         self._update_label_height()
 
@@ -101,7 +115,10 @@ class ChatApp(App):
             self.header_rect = RoundedRectangle(radius=[0])
         header.bind(pos=self._update_header_bg, size=self._update_header_bg)
         header_label = Label(
-            text="[b]دستیار هوشمند[/b]", markup=True, font_size=dp(18), color=(1, 1, 1, 1)
+            text=fa("دستیار هوشمند"),
+            font_name="Vazir",
+            font_size=dp(18),
+            color=(1, 1, 1, 1),
         )
         header.add_widget(header_label)
         root.add_widget(header)
@@ -118,7 +135,8 @@ class ChatApp(App):
 
         input_row = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52), spacing=dp(8))
         self.text_input = TextInput(
-            hint_text="پیامت رو بنویس...",
+            hint_text=fa("پیامت رو بنویس..."),
+            font_name="Vazir",
             multiline=False,
             size_hint=(0.78, 1),
             font_size=dp(16),
@@ -130,7 +148,8 @@ class ChatApp(App):
         self.text_input.bind(on_text_validate=self.on_send)
 
         send_btn = Button(
-            text="ارسال",
+            text=fa("ارسال"),
+            font_name="Vazir",
             size_hint=(0.22, 1),
             background_color=(0.15, 0.45, 0.85, 1),
             background_normal="",
