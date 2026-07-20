@@ -4,11 +4,11 @@ package.name = aiassistant
 package.domain = org.mychatbot
 
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,ttf
 
 version = 1.0
 
-requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer
+requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer,arabic_reshaper,python-bidi
 
 orientation = portrait
 fullscreen = 0
