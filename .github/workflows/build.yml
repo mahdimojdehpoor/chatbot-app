@@ -17,10 +17,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Download Persian font
+        run: |
+          curl -L -o Vazirmatn-Regular.ttf https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Regular.ttf
+
       - name: Install system dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake libltdl-dev 
+          sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool libltdl-dev pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake
 
       - name: Install buildozer
         run: |
