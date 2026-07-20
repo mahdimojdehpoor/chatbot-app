@@ -24,7 +24,7 @@ from kivy.graphics import Color, RoundedRectangle
 # کلید API خودتون رو اینجا بذارید
 # از سایت console.groq.com بگیرید
 # ==========================================
-API_KEY = "اینجا_کلید_API_رو_بذار"
+API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # رنگ‌بندی
