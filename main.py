@@ -4,7 +4,7 @@
 - فونت و نمایش درست فارسی
 - چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
 - تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
-- کپی کردن پیام‌ها
+- کپی مطمئن پیام‌ها (متن اصلی، نه شکل‌بندی‌شده) + رفع مشکل هایلایت
 - ضمیمه کردن فایل متنی (با درخواست مجوز دسترسی)
 """
 
@@ -27,6 +27,7 @@ from kivy.uix.popup import Popup
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.core.text import LabelBase
+from kivy.core.clipboard import Clipboard
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 
@@ -34,7 +35,7 @@ from kivy.graphics import Color, RoundedRectangle
 # کلید API خودتون رو اینجا بذارید
 # از سایت console.groq.com بگیرید
 # ==========================================
-API_KEY = "اینجا_کلید_API_رو_بذار"
+API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
 BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
@@ -72,7 +73,9 @@ class ChatBubble(BoxLayout):
         self.orientation = "vertical"
         self.size_hint_y = None
         self.padding = (dp(4), dp(4))
+        self.spacing = dp(2)
 
+        self.raw_text = text  # متن اصلی (بدون شکل‌بندی) برای کپی درست
         bubble_color = USER_BUBBLE_COLOR if is_user else BOT_BUBBLE_COLOR
 
         self.input = TextInput(
@@ -88,10 +91,28 @@ class ChatBubble(BoxLayout):
             foreground_color=(1, 1, 1, 1),
             cursor_color=(0, 0, 0, 0),
             halign="right",
-            padding=(dp(12), dp(10)),
+            padding=(dp(12), dp(6)),
         )
         self.input.bind(minimum_height=self._sync_height)
         self.add_widget(self.input)
+
+        # ردیف کوچیک دکمه‌ی کپی (پایین حباب)
+        copy_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(26))
+        self.copy_btn = Button(
+            text=fa("کپی"),
+            font_name="Vazir",
+            font_size=dp(11),
+            size_hint=(None, 1),
+            width=dp(52),
+            background_color=(0, 0, 0, 0.25),
+            background_normal="",
+            color=(1, 1, 1, 0.85),
+        )
+        self.copy_btn.bind(on_press=self.copy_to_clipboard)
+        spacer = Label(size_hint_x=1)
+        copy_row.add_widget(spacer)
+        copy_row.add_widget(self.copy_btn)
+        self.add_widget(copy_row)
 
         self.size_hint_x = 0.78
         if is_user:
@@ -106,14 +127,22 @@ class ChatBubble(BoxLayout):
 
     def _sync_height(self, *args):
         self.input.height = self.input.minimum_height
-        self.height = self.input.height + dp(8)
+        self.height = self.input.height + dp(8) + dp(26)
 
     def _update_bg(self, *args):
         self.bg_rect.pos = self.pos
         self.bg_rect.size = self.size
 
     def set_text(self, new_text):
+        self.raw_text = new_text
         self.input.text = fa(new_text)
+
+    def copy_to_clipboard(self, *args):
+        Clipboard.copy(self.raw_text)
+        self.input.cancel_selection()
+        original = self.copy_btn.text
+        self.copy_btn.text = fa("کپی شد ✓")
+        Clock.schedule_once(lambda dt: setattr(self.copy_btn, "text", original), 1.2)
 
 
 class ChatApp(App):
@@ -131,7 +160,6 @@ class ChatApp(App):
         self.current_session_id = str(int(time.time() * 1000))
         self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
 
-        # درخواست مجوز دسترسی به فایل‌ها (فقط روی اندروید)
         self._request_android_permissions()
 
         root = BoxLayout(orientation="vertical")
@@ -154,7 +182,20 @@ class ChatApp(App):
         if API_KEY == "اینجا_کلید_API_رو_بذار":
             self.add_bubble("⚠️ هنوز کلید API رو توی کد نذاشتید!", is_user=False)
 
+        Window.bind(on_touch_down=self._on_global_touch)
+
         return root
+
+    def _on_global_touch(self, window, touch):
+        for bubble in list(self.messages_box.children):
+            ti = bubble.input
+            try:
+                inside = ti.collide_point(*ti.to_widget(*touch.pos))
+            except Exception:
+                inside = False
+            if not inside and ti.selection_text:
+                ti.cancel_selection()
+        return False
 
     def _request_android_permissions(self):
         try:
@@ -164,7 +205,7 @@ class ChatApp(App):
                 Permission.WRITE_EXTERNAL_STORAGE,
             ])
         except Exception:
-            pass  # روی گوشی نیستیم یا این ماژول در دسترس نیست، مشکلی نیست
+            pass
 
     def _full_system_prompt(self):
         return BASE_PROMPT + " " + LEVEL_PROMPTS[self.response_level]
@@ -265,8 +306,6 @@ class ChatApp(App):
             self.preview_label.color = (0.6, 0.6, 0.65, 1)
 
     # -----------------------------------------------------------------
-    # پیوست فایل متنی
-    # -----------------------------------------------------------------
     def pick_file(self):
         try:
             from plyer import filechooser
@@ -333,8 +372,6 @@ class ChatApp(App):
 
         Clock.schedule_once(finish)
 
-    # -----------------------------------------------------------------
-    # مدیریت چت‌های جداگانه (ذخیره/بارگذاری/لیست/حذف)
     # -----------------------------------------------------------------
     def _session_path(self, session_id):
         return os.path.join(self.sessions_dir, f"{session_id}.json")
@@ -499,8 +536,6 @@ class ChatApp(App):
         confirm_popup.content = content
         confirm_popup.open()
 
-    # -----------------------------------------------------------------
-    # تنظیمات (سطح پاسخ)
     # -----------------------------------------------------------------
     def load_settings(self):
         try:
