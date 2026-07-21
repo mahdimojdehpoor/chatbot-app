@@ -1,22 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-چت‌بات هوش مصنوعی - نسخه گرافیکی شیک (Kivy) با پشتیبانی از فونت فارسی،
-ذخیره‌سازی خودکار چت و رفع مشکل کیبورد
+چت‌بات هوش مصنوعی - نسخه‌ی کامل با:
+- فونت و نمایش درست فارسی
+- چت‌های جداگانه (مثل ChatGPT) + تاریخچه
+- تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
+- کپی کردن پیام‌ها
+- ضمیمه کردن فایل متنی
 """
 
 import os
 import json
-import requests
+import time
 import threading
+import requests
 import arabic_reshaper
 from bidi.algorithm import get_display
 
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.core.text import LabelBase
@@ -30,52 +37,65 @@ from kivy.graphics import Color, RoundedRectangle
 API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
-SYSTEM_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی جواب می‌دی."
+BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
 
-# رنگ‌بندی
+LEVEL_PROMPTS = {
+    "عمومی": "پاسخ‌هات رو ساده، روان و قابل فهم برای یک فرد عادی بده. از اصطلاحات تخصصی و پیچیده پرهیز کن.",
+    "نیمه‌تخصصی": "پاسخ‌هات رو با جزئیات متوسط بده و از اصطلاحات تخصصی رایج استفاده کن، ولی همچنان قابل فهم باشه.",
+    "تخصصی": "پاسخ‌هات رو کامل، دقیق و با عمق فنی/آکادمیک بده و از اصطلاحات تخصصی دقیق استفاده کن.",
+}
+LEVELS = ["عمومی", "نیمه‌تخصصی", "تخصصی"]
+
 BG_COLOR = (0.06, 0.07, 0.09, 1)
 USER_BUBBLE_COLOR = (0.15, 0.45, 0.85, 1)
 BOT_BUBBLE_COLOR = (0.18, 0.19, 0.23, 1)
 HEADER_COLOR = (0.1, 0.11, 0.14, 1)
 
 Window.clearcolor = BG_COLOR
-
-# رفع مشکل: کیبورد جلوی کادر تایپ رو نگیره
 Window.softinput_mode = "below_target"
 
-# ثبت فونت فارسی
 LabelBase.register(name="Vazir", fn_regular="Vazirmatn-Regular.ttf")
 
 
 def fa(text):
     """متن فارسی رو برای نمایش درست توی Kivy آماده می‌کنه (چسبوندن حروف + جهت راست‌به‌چپ)"""
-    reshaped = arabic_reshaper.reshape(text)
-    return get_display(reshaped)
+    try:
+        reshaped = arabic_reshaper.reshape(text)
+        return get_display(reshaped)
+    except Exception:
+        return text
 
 
+# ---------------------------------------------------------------------------
+# حباب پیام: یه TextInput غیرقابل‌ویرایش که هم ظاهرش مثل حباب چته
+# و هم native می‌شه متنش رو نگه داشت و کپی کرد (لمس طولانی روی متن)
+# ---------------------------------------------------------------------------
 class ChatBubble(BoxLayout):
     def __init__(self, text, is_user, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
         self.size_hint_y = None
-        self.padding = (dp(14), dp(10))
+        self.padding = (dp(4), dp(4))
 
         bubble_color = USER_BUBBLE_COLOR if is_user else BOT_BUBBLE_COLOR
 
-        self.label = Label(
+        self.input = TextInput(
             text=fa(text),
             font_name="Vazir",
-            color=(1, 1, 1, 1),
             font_size=dp(15),
-            halign="right",
-            valign="middle",
+            readonly=True,
+            multiline=True,
             size_hint_y=None,
+            background_normal="",
+            background_active="",
+            background_color=(0, 0, 0, 0),
+            foreground_color=(1, 1, 1, 1),
+            cursor_color=(0, 0, 0, 0),
+            halign="right",
+            padding=(dp(12), dp(10)),
         )
-        self.label.bind(
-            width=lambda *x: self.label.setter("text_size")(self.label, (self.label.width, None))
-        )
-        self.label.bind(texture_size=self._update_label_height)
-        self.add_widget(self.label)
+        self.input.bind(minimum_height=self._sync_height)
+        self.add_widget(self.input)
 
         self.size_hint_x = 0.78
         if is_user:
@@ -88,45 +108,37 @@ class ChatBubble(BoxLayout):
             self.bg_rect = RoundedRectangle(radius=[dp(16)])
         self.bind(pos=self._update_bg, size=self._update_bg)
 
-    def _update_label_height(self, *args):
-        self.label.height = self.label.texture_size[1]
-        self.height = self.label.height + dp(20)
+    def _sync_height(self, *args):
+        self.input.height = self.input.minimum_height
+        self.height = self.input.height + dp(8)
 
     def _update_bg(self, *args):
         self.bg_rect.pos = self.pos
         self.bg_rect.size = self.size
 
     def set_text(self, new_text):
-        self.label.text = fa(new_text)
-        self.label.texture_update()
-        self._update_label_height()
+        self.input.text = fa(new_text)
 
 
 class ChatApp(App):
 
+    # -----------------------------------------------------------------
+    # ساخت رابط کاربری
+    # -----------------------------------------------------------------
     def build(self):
         self.title = "چت‌بات هوش مصنوعی"
 
-        # مسیر فایل ذخیره‌سازی چت (پوشه‌ی مخصوص اپ، همیشه در دسترسه)
-        self.history_file = os.path.join(self.user_data_dir, "chat_history.json")
+        self.data_dir = self.user_data_dir
+        self.sessions_dir = os.path.join(self.data_dir, "sessions")
+        os.makedirs(self.sessions_dir, exist_ok=True)
+        self.settings_file = os.path.join(self.data_dir, "settings.json")
 
-        self.conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.response_level = self.load_settings()
+        self.current_session_id = str(int(time.time() * 1000))
+        self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
 
         root = BoxLayout(orientation="vertical")
-
-        header = BoxLayout(size_hint=(1, None), height=dp(56), padding=(dp(16), 0))
-        with header.canvas.before:
-            Color(*HEADER_COLOR)
-            self.header_rect = RoundedRectangle(radius=[0])
-        header.bind(pos=self._update_header_bg, size=self._update_header_bg)
-        header_label = Label(
-            text=fa("دستیار هوشمند"),
-            font_name="Vazir",
-            font_size=dp(18),
-            color=(1, 1, 1, 1),
-        )
-        header.add_widget(header_label)
-        root.add_widget(header)
+        root.add_widget(self._build_header())
 
         body = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10))
 
@@ -138,19 +150,121 @@ class ChatApp(App):
         self.scroll.add_widget(self.messages_box)
         body.add_widget(self.scroll)
 
-        input_row = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52), spacing=dp(8))
-        self.text_input = TextInput(
-            hint_text=fa("پیامت رو بنویس..."),
+        body.add_widget(self._build_input_row())
+        root.add_widget(body)
+
+        self.add_bubble("سلام! چطور می‌تونم کمکت کنم؟", is_user=False)
+        if API_KEY == "اینجا_کلید_API_رو_بذار":
+            self.add_bubble("⚠️ هنوز کلید API رو توی کد نذاشتید!", is_user=False)
+
+        return root
+
+    def _full_system_prompt(self):
+        return BASE_PROMPT + " " + LEVEL_PROMPTS[self.response_level]
+
+    # -----------------------------------------------------------------
+    # هدر بالای صفحه: منوی چت‌های قبلی، عنوان، چت جدید، تنظیمات
+    # -----------------------------------------------------------------
+    def _build_header(self):
+        header = BoxLayout(size_hint=(1, None), height=dp(56), padding=(dp(10), 0), spacing=dp(6))
+        with header.canvas.before:
+            Color(*HEADER_COLOR)
+            self.header_rect = RoundedRectangle(radius=[0])
+        header.bind(pos=self._update_header_bg, size=self._update_header_bg)
+
+        menu_btn = Button(
+            text=fa("چت‌ها"),
             font_name="Vazir",
+            size_hint=(None, 1),
+            width=dp(64),
+            background_color=(0, 0, 0, 0),
+            background_normal="",
+            color=(1, 1, 1, 1),
+        )
+        menu_btn.bind(on_press=lambda *a: self.open_sessions_popup())
+        header.add_widget(menu_btn)
+
+        title = Label(text=fa("دستیار هوشمند"), font_name="Vazir", font_size=dp(17), color=(1, 1, 1, 1))
+        header.add_widget(title)
+
+        settings_btn = Button(
+            text=fa("تنظیمات"),
+            font_name="Vazir",
+            size_hint=(None, 1),
+            width=dp(80),
+            background_color=(0, 0, 0, 0),
+            background_normal="",
+            color=(1, 1, 1, 1),
+        )
+        settings_btn.bind(on_press=lambda *a: self.open_settings_popup())
+        header.add_widget(settings_btn)
+
+        new_btn = Button(
+            text="+",
+            size_hint=(None, 1),
+            width=dp(44),
+            background_color=(0.15, 0.45, 0.85, 1),
+            background_normal="",
+            color=(1, 1, 1, 1),
+        )
+        new_btn.bind(on_press=lambda *a: self.new_chat())
+        header.add_widget(new_btn)
+
+        return header
+
+    def _update_header_bg(self, instance, *args):
+        self.header_rect.pos = instance.pos
+        self.header_rect.size = instance.size
+
+    # -----------------------------------------------------------------
+    # ردیف پایین: دکمه‌ی پیوست فایل + ورودی متن + دکمه ارسال
+    # -----------------------------------------------------------------
+    def _build_input_row(self):
+        input_row = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52), spacing=dp(6))
+
+        attach_btn = Button(
+            text="+",
+            size_hint=(None, 1),
+            width=dp(44),
+            background_color=(0.18, 0.19, 0.23, 1),
+            background_normal="",
+            color=(1, 1, 1, 1),
+        )
+        attach_btn.bind(on_press=lambda *a: self.pick_file())
+
+        # لایه‌ای که TextInput واقعی (نامرئی برای متن) + پیش‌نمایش چسبیده‌ی فارسی رو روی هم می‌ذاره
+        input_stack = FloatLayout(size_hint=(0.62, 1))
+
+        self.text_input = TextInput(
+            hint_text="",
             multiline=False,
-            size_hint=(0.78, 1),
+            size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
             font_size=dp(16),
             background_color=(0.15, 0.16, 0.19, 1),
-            foreground_color=(1, 1, 1, 1),
+            foreground_color=(0, 0, 0, 0),  # متن واقعی نامرئیه، فقط برای گرفتن ورودیه
             cursor_color=(1, 1, 1, 1),
             padding=(dp(12), dp(12)),
         )
         self.text_input.bind(on_text_validate=self.on_send)
+        self.text_input.bind(text=self._update_preview)
+
+        self.preview_label = Label(
+            text=fa("پیامت رو بنویس..."),
+            font_name="Vazir",
+            font_size=dp(16),
+            color=(0.6, 0.6, 0.65, 1),
+            size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
+            halign="right",
+            valign="middle",
+        )
+        self.preview_label.bind(size=lambda *a: setattr(
+            self.preview_label, "text_size", self.preview_label.size
+        ))
+
+        input_stack.add_widget(self.text_input)
+        input_stack.add_widget(self.preview_label)
 
         send_btn = Button(
             text=fa("ارسال"),
@@ -161,28 +275,45 @@ class ChatApp(App):
         )
         send_btn.bind(on_press=self.on_send)
 
-        input_row.add_widget(self.text_input)
+        input_row.add_widget(attach_btn)
+        input_row.add_widget(input_stack)
         input_row.add_widget(send_btn)
-        body.add_widget(input_row)
+        return input_row
 
-        root.add_widget(body)
+    def _update_preview(self, instance, value):
+        if value:
+            self.preview_label.text = fa(value)
+            self.preview_label.color = (1, 1, 1, 1)
+        else:
+            self.preview_label.text = fa("پیامت رو بنویس...")
+            self.preview_label.color = (0.6, 0.6, 0.65, 1)
 
-        # بارگذاری چت قبلی (اگه وجود داشته باشه)
-        self.load_history()
+    # -----------------------------------------------------------------
+    # پیوست فایل متنی
+    # -----------------------------------------------------------------
+    def pick_file(self):
+        try:
+            from plyer import filechooser
+            filechooser.open_file(on_selection=self._file_selected, filters=[("Text", "*.txt")])
+        except Exception as e:
+            self.add_bubble(f"امکان باز کردن فایل نبود: {e}", is_user=False)
 
-        if not self.messages_box.children:
-            self.add_bubble("سلام! چطور می‌تونم کمکت کنم؟", is_user=False, save=False)
+    def _file_selected(self, selection):
+        if not selection:
+            return
+        path = selection[0]
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            current = self.text_input.text
+            self.text_input.text = (current + "\n" + content).strip() if current else content
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False))
 
-        if API_KEY == "اینجا_کلید_API_رو_بذار":
-            self.add_bubble("⚠️ هنوز کلید API رو توی کد نذاشتید!", is_user=False, save=False)
-
-        return root
-
-    def _update_header_bg(self, instance, *args):
-        self.header_rect.pos = instance.pos
-        self.header_rect.size = instance.size
-
-    def add_bubble(self, text, is_user, save=True):
+    # -----------------------------------------------------------------
+    # پیام‌ها
+    # -----------------------------------------------------------------
+    def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
         self.messages_box.add_widget(bubble)
         Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
@@ -196,9 +327,7 @@ class ChatApp(App):
         self.add_bubble(user_text, is_user=True)
         thinking_bubble = self.add_bubble("در حال فکر کردن...", is_user=False)
 
-        threading.Thread(
-            target=self.get_ai_response, args=(user_text, thinking_bubble)
-        ).start()
+        threading.Thread(target=self.get_ai_response, args=(user_text, thinking_bubble)).start()
 
     def get_ai_response(self, user_text, thinking_bubble):
         self.conversation_history.append({"role": "user", "content": user_text})
@@ -207,8 +336,8 @@ class ChatApp(App):
         data = {
             "model": "llama-3.3-70b-versatile",
             "messages": self.conversation_history,
-            "temperature": 0.3,
-            "max_tokens": 1024,
+            "temperature": 0.2,
+            "max_tokens": 1500,
         }
 
         try:
@@ -222,42 +351,181 @@ class ChatApp(App):
 
         def finish(dt):
             thinking_bubble.set_text(reply)
-            self.save_history()
+            self.save_current_session()
 
         Clock.schedule_once(finish)
 
-    def save_history(self):
-        """ذخیره‌ی کل مکالمه روی حافظه‌ی گوشی"""
-        try:
-            with open(self.history_file, "w", encoding="utf-8") as f:
-                json.dump(self.conversation_history, f, ensure_ascii=False)
-        except Exception as e:
-            print("خطا در ذخیره‌سازی چت:", e)
+    # -----------------------------------------------------------------
+    # مدیریت چت‌های جداگانه (ذخیره/بارگذاری/لیست)
+    # -----------------------------------------------------------------
+    def _session_path(self, session_id):
+        return os.path.join(self.sessions_dir, f"{session_id}.json")
 
-    def load_history(self):
-        """بارگذاری مکالمه‌ی قبلی از حافظه‌ی گوشی (در صورت وجود)"""
-        if not os.path.exists(self.history_file):
+    def save_current_session(self):
+        has_content = any(m["role"] == "user" for m in self.conversation_history)
+        if not has_content:
             return
+        first_user_msg = next((m["content"] for m in self.conversation_history if m["role"] == "user"), "")
+        title = (first_user_msg[:30] + "…") if len(first_user_msg) > 30 else first_user_msg
+        payload = {
+            "id": self.current_session_id,
+            "title": title,
+            "timestamp": int(time.time()),
+            "messages": self.conversation_history,
+        }
         try:
-            with open(self.history_file, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            if saved and isinstance(saved, list):
-                self.conversation_history = saved
-                for msg in saved:
-                    if msg["role"] == "user":
-                        self.add_bubble(msg["content"], is_user=True, save=False)
-                    elif msg["role"] == "assistant":
-                        self.add_bubble(msg["content"], is_user=False, save=False)
+            with open(self._session_path(self.current_session_id), "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
         except Exception as e:
-            print("خطا در بارگذاری چت:", e)
+            print("خطا در ذخیره‌ی چت:", e)
 
+    def list_sessions(self):
+        sessions = []
+        if not os.path.isdir(self.sessions_dir):
+            return sessions
+        for fname in os.listdir(self.sessions_dir):
+            if fname.endswith(".json"):
+                try:
+                    with open(os.path.join(self.sessions_dir, fname), "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    sessions.append(data)
+                except Exception:
+                    continue
+        sessions.sort(key=lambda s: s.get("timestamp", 0), reverse=True)
+        return sessions
+
+    def new_chat(self):
+        self.save_current_session()
+        self.current_session_id = str(int(time.time() * 1000))
+        self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
+        self.messages_box.clear_widgets()
+        self.add_bubble("چت جدید شروع شد. چطور می‌تونم کمکت کنم؟", is_user=False)
+
+    def load_session(self, session_data):
+        self.current_session_id = session_data["id"]
+        self.conversation_history = session_data["messages"]
+        self.messages_box.clear_widgets()
+        for m in self.conversation_history:
+            if m["role"] == "user":
+                self.add_bubble(m["content"], is_user=True)
+            elif m["role"] == "assistant":
+                self.add_bubble(m["content"], is_user=False)
+
+    def open_sessions_popup(self):
+        self.save_current_session()
+        sessions = self.list_sessions()
+
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10), size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+
+        scroll = ScrollView(size_hint=(1, 1))
+        scroll.add_widget(content)
+
+        if not sessions:
+            content.add_widget(Label(text=fa("هنوز چتی ذخیره نشده"), font_name="Vazir", size_hint_y=None, height=dp(40)))
+
+        popup = Popup(
+            title=fa("چت‌های قبلی"),
+            title_font="Vazir",
+            size_hint=(0.9, 0.8),
+            separator_color=(0.15, 0.45, 0.85, 1),
+        )
+
+        for s in sessions:
+            btn = Button(
+                text=fa(s.get("title", "بدون‌عنوان") or "چت خالی"),
+                font_name="Vazir",
+                size_hint_y=None,
+                height=dp(48),
+                background_color=(0.15, 0.16, 0.19, 1),
+                background_normal="",
+                color=(1, 1, 1, 1),
+            )
+
+            def make_handler(sess=s):
+                def handler(*a):
+                    self.load_session(sess)
+                    popup.dismiss()
+                return handler
+
+            btn.bind(on_press=make_handler())
+            content.add_widget(btn)
+
+        popup.content = scroll
+        popup.open()
+
+    # -----------------------------------------------------------------
+    # تنظیمات (سطح پاسخ)
+    # -----------------------------------------------------------------
+    def load_settings(self):
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            level = data.get("level")
+            if level in LEVELS:
+                return level
+        except Exception:
+            pass
+        return "نیمه‌تخصصی"
+
+    def save_settings(self):
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump({"level": self.response_level}, f, ensure_ascii=False)
+        except Exception as e:
+            print("خطا در ذخیره‌ی تنظیمات:", e)
+
+    def open_settings_popup(self):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(16))
+
+        content.add_widget(Label(
+            text=fa("سطح پاسخ‌دهی رو انتخاب کن:"),
+            font_name="Vazir",
+            size_hint_y=None,
+            height=dp(36),
+        ))
+
+        popup = Popup(
+            title=fa("تنظیمات"),
+            title_font="Vazir",
+            size_hint=(0.85, 0.5),
+            separator_color=(0.15, 0.45, 0.85, 1),
+        )
+
+        for level in LEVELS:
+            is_active = level == self.response_level
+            btn = Button(
+                text=fa(level + (" ✓" if is_active else "")),
+                font_name="Vazir",
+                size_hint_y=None,
+                height=dp(48),
+                background_color=(0.15, 0.45, 0.85, 1) if is_active else (0.18, 0.19, 0.23, 1),
+                background_normal="",
+                color=(1, 1, 1, 1),
+            )
+
+            def make_handler(lvl=level):
+                def handler(*a):
+                    self.response_level = lvl
+                    self.save_settings()
+                    if self.conversation_history and self.conversation_history[0]["role"] == "system":
+                        self.conversation_history[0]["content"] = self._full_system_prompt()
+                    popup.dismiss()
+                return handler
+
+            btn.bind(on_press=make_handler())
+            content.add_widget(btn)
+
+        popup.content = content
+        popup.open()
+
+    # -----------------------------------------------------------------
     def on_pause(self):
-        # وقتی کاربر از اپ خارج می‌شه یا اپ پس‌زمینه می‌ره (اندروید)
-        self.save_history()
+        self.save_current_session()
         return True
 
     def on_stop(self):
-        self.save_history()
+        self.save_current_session()
 
 
 if __name__ == "__main__":
