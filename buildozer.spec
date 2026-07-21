@@ -8,12 +8,12 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 
 version = 1.0
 
-requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer,arabic_reshaper,python-bidi
+requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer,arabic_reshaper,python-bidi,plyer
 
 orientation = portrait
 fullscreen = 0
 
-android.permissions = INTERNET
+android.permissions = INTERNET,READ_EXTERNAL_STORAGE
 
 android.api = 33
 android.minapi = 21
