@@ -2,10 +2,10 @@
 """
 چت‌بات هوش مصنوعی - نسخه‌ی کامل با:
 - فونت و نمایش درست فارسی
-- چت‌های جداگانه (مثل ChatGPT) + تاریخچه
+- چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
 - تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
 - کپی کردن پیام‌ها
-- ضمیمه کردن فایل متنی
+- ضمیمه کردن فایل متنی (با درخواست مجوز دسترسی)
 """
 
 import os
@@ -34,7 +34,7 @@ from kivy.graphics import Color, RoundedRectangle
 # کلید API خودتون رو اینجا بذارید
 # از سایت console.groq.com بگیرید
 # ==========================================
-API_KEY = "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"
+API_KEY = "اینجا_کلید_API_رو_بذار"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
 BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
@@ -66,10 +66,6 @@ def fa(text):
         return text
 
 
-# ---------------------------------------------------------------------------
-# حباب پیام: یه TextInput غیرقابل‌ویرایش که هم ظاهرش مثل حباب چته
-# و هم native می‌شه متنش رو نگه داشت و کپی کرد (لمس طولانی روی متن)
-# ---------------------------------------------------------------------------
 class ChatBubble(BoxLayout):
     def __init__(self, text, is_user, **kwargs):
         super().__init__(**kwargs)
@@ -123,8 +119,6 @@ class ChatBubble(BoxLayout):
 class ChatApp(App):
 
     # -----------------------------------------------------------------
-    # ساخت رابط کاربری
-    # -----------------------------------------------------------------
     def build(self):
         self.title = "چت‌بات هوش مصنوعی"
 
@@ -136,6 +130,9 @@ class ChatApp(App):
         self.response_level = self.load_settings()
         self.current_session_id = str(int(time.time() * 1000))
         self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
+
+        # درخواست مجوز دسترسی به فایل‌ها (فقط روی اندروید)
+        self._request_android_permissions()
 
         root = BoxLayout(orientation="vertical")
         root.add_widget(self._build_header())
@@ -159,11 +156,19 @@ class ChatApp(App):
 
         return root
 
+    def _request_android_permissions(self):
+        try:
+            from android.permissions import request_permissions, Permission
+            request_permissions([
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE,
+            ])
+        except Exception:
+            pass  # روی گوشی نیستیم یا این ماژول در دسترس نیست، مشکلی نیست
+
     def _full_system_prompt(self):
         return BASE_PROMPT + " " + LEVEL_PROMPTS[self.response_level]
 
-    # -----------------------------------------------------------------
-    # هدر بالای صفحه: منوی چت‌های قبلی، عنوان، چت جدید، تنظیمات
     # -----------------------------------------------------------------
     def _build_header(self):
         header = BoxLayout(size_hint=(1, None), height=dp(56), padding=(dp(10), 0), spacing=dp(6))
@@ -173,13 +178,8 @@ class ChatApp(App):
         header.bind(pos=self._update_header_bg, size=self._update_header_bg)
 
         menu_btn = Button(
-            text=fa("چت‌ها"),
-            font_name="Vazir",
-            size_hint=(None, 1),
-            width=dp(64),
-            background_color=(0, 0, 0, 0),
-            background_normal="",
-            color=(1, 1, 1, 1),
+            text=fa("چت‌ها"), font_name="Vazir", size_hint=(None, 1), width=dp(64),
+            background_color=(0, 0, 0, 0), background_normal="", color=(1, 1, 1, 1),
         )
         menu_btn.bind(on_press=lambda *a: self.open_sessions_popup())
         header.add_widget(menu_btn)
@@ -188,24 +188,15 @@ class ChatApp(App):
         header.add_widget(title)
 
         settings_btn = Button(
-            text=fa("تنظیمات"),
-            font_name="Vazir",
-            size_hint=(None, 1),
-            width=dp(80),
-            background_color=(0, 0, 0, 0),
-            background_normal="",
-            color=(1, 1, 1, 1),
+            text=fa("تنظیمات"), font_name="Vazir", size_hint=(None, 1), width=dp(80),
+            background_color=(0, 0, 0, 0), background_normal="", color=(1, 1, 1, 1),
         )
         settings_btn.bind(on_press=lambda *a: self.open_settings_popup())
         header.add_widget(settings_btn)
 
         new_btn = Button(
-            text="+",
-            size_hint=(None, 1),
-            width=dp(44),
-            background_color=(0.15, 0.45, 0.85, 1),
-            background_normal="",
-            color=(1, 1, 1, 1),
+            text="+", size_hint=(None, 1), width=dp(44),
+            background_color=(0.15, 0.45, 0.85, 1), background_normal="", color=(1, 1, 1, 1),
         )
         new_btn.bind(on_press=lambda *a: self.new_chat())
         header.add_widget(new_btn)
@@ -217,22 +208,15 @@ class ChatApp(App):
         self.header_rect.size = instance.size
 
     # -----------------------------------------------------------------
-    # ردیف پایین: دکمه‌ی پیوست فایل + ورودی متن + دکمه ارسال
-    # -----------------------------------------------------------------
     def _build_input_row(self):
         input_row = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52), spacing=dp(6))
 
         attach_btn = Button(
-            text="+",
-            size_hint=(None, 1),
-            width=dp(44),
-            background_color=(0.18, 0.19, 0.23, 1),
-            background_normal="",
-            color=(1, 1, 1, 1),
+            text="+", size_hint=(None, 1), width=dp(44),
+            background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
         )
         attach_btn.bind(on_press=lambda *a: self.pick_file())
 
-        # لایه‌ای که TextInput واقعی (نامرئی برای متن) + پیش‌نمایش چسبیده‌ی فارسی رو روی هم می‌ذاره
         input_stack = FloatLayout(size_hint=(0.62, 1))
 
         self.text_input = TextInput(
@@ -242,7 +226,7 @@ class ChatApp(App):
             pos_hint={"x": 0, "y": 0},
             font_size=dp(16),
             background_color=(0.15, 0.16, 0.19, 1),
-            foreground_color=(0, 0, 0, 0),  # متن واقعی نامرئیه، فقط برای گرفتن ورودیه
+            foreground_color=(0, 0, 0, 0),
             cursor_color=(1, 1, 1, 1),
             padding=(dp(12), dp(12)),
         )
@@ -250,14 +234,9 @@ class ChatApp(App):
         self.text_input.bind(text=self._update_preview)
 
         self.preview_label = Label(
-            text=fa("پیامت رو بنویس..."),
-            font_name="Vazir",
-            font_size=dp(16),
-            color=(0.6, 0.6, 0.65, 1),
-            size_hint=(1, 1),
-            pos_hint={"x": 0, "y": 0},
-            halign="right",
-            valign="middle",
+            text=fa("پیامت رو بنویس..."), font_name="Vazir", font_size=dp(16),
+            color=(0.6, 0.6, 0.65, 1), size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
+            halign="right", valign="middle",
         )
         self.preview_label.bind(size=lambda *a: setattr(
             self.preview_label, "text_size", self.preview_label.size
@@ -267,11 +246,8 @@ class ChatApp(App):
         input_stack.add_widget(self.preview_label)
 
         send_btn = Button(
-            text=fa("ارسال"),
-            font_name="Vazir",
-            size_hint=(0.22, 1),
-            background_color=(0.15, 0.45, 0.85, 1),
-            background_normal="",
+            text=fa("ارسال"), font_name="Vazir", size_hint=(0.22, 1),
+            background_color=(0.15, 0.45, 0.85, 1), background_normal="",
         )
         send_btn.bind(on_press=self.on_send)
 
@@ -294,7 +270,7 @@ class ChatApp(App):
     def pick_file(self):
         try:
             from plyer import filechooser
-            filechooser.open_file(on_selection=self._file_selected, filters=[("Text", "*.txt")])
+            filechooser.open_file(on_selection=self._file_selected)
         except Exception as e:
             self.add_bubble(f"امکان باز کردن فایل نبود: {e}", is_user=False)
 
@@ -302,16 +278,18 @@ class ChatApp(App):
         if not selection:
             return
         path = selection[0]
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-            current = self.text_input.text
-            self.text_input.text = (current + "\n" + content).strip() if current else content
-        except Exception as e:
-            Clock.schedule_once(lambda dt: self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False))
 
-    # -----------------------------------------------------------------
-    # پیام‌ها
+        def do_read(dt):
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                current = self.text_input.text
+                self.text_input.text = (current + "\n" + content).strip() if current else content
+            except Exception as e:
+                self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
+
+        Clock.schedule_once(do_read)
+
     # -----------------------------------------------------------------
     def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
@@ -356,7 +334,7 @@ class ChatApp(App):
         Clock.schedule_once(finish)
 
     # -----------------------------------------------------------------
-    # مدیریت چت‌های جداگانه (ذخیره/بارگذاری/لیست)
+    # مدیریت چت‌های جداگانه (ذخیره/بارگذاری/لیست/حذف)
     # -----------------------------------------------------------------
     def _session_path(self, session_id):
         return os.path.join(self.sessions_dir, f"{session_id}.json")
@@ -394,6 +372,14 @@ class ChatApp(App):
         sessions.sort(key=lambda s: s.get("timestamp", 0), reverse=True)
         return sessions
 
+    def delete_session(self, session_id):
+        try:
+            path = self._session_path(session_id)
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            print("خطا در حذف چت:", e)
+
     def new_chat(self):
         self.save_current_session()
         self.current_session_id = str(int(time.time() * 1000))
@@ -413,46 +399,105 @@ class ChatApp(App):
 
     def open_sessions_popup(self):
         self.save_current_session()
-        sessions = self.list_sessions()
-
-        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10), size_hint_y=None)
-        content.bind(minimum_height=content.setter("height"))
-
-        scroll = ScrollView(size_hint=(1, 1))
-        scroll.add_widget(content)
-
-        if not sessions:
-            content.add_widget(Label(text=fa("هنوز چتی ذخیره نشده"), font_name="Vazir", size_hint_y=None, height=dp(40)))
 
         popup = Popup(
-            title=fa("چت‌های قبلی"),
-            title_font="Vazir",
-            size_hint=(0.9, 0.8),
-            separator_color=(0.15, 0.45, 0.85, 1),
+            title=fa("چت‌های قبلی"), title_font="Vazir",
+            size_hint=(0.9, 0.8), separator_color=(0.15, 0.45, 0.85, 1),
         )
 
-        for s in sessions:
-            btn = Button(
-                text=fa(s.get("title", "بدون‌عنوان") or "چت خالی"),
-                font_name="Vazir",
-                size_hint_y=None,
-                height=dp(48),
-                background_color=(0.15, 0.16, 0.19, 1),
-                background_normal="",
-                color=(1, 1, 1, 1),
-            )
+        def build_list():
+            sessions = self.list_sessions()
+            content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10), size_hint_y=None)
+            content.bind(minimum_height=content.setter("height"))
 
-            def make_handler(sess=s):
-                def handler(*a):
-                    self.load_session(sess)
-                    popup.dismiss()
-                return handler
+            if not sessions:
+                content.add_widget(Label(
+                    text=fa("هنوز چتی ذخیره نشده"), font_name="Vazir",
+                    size_hint_y=None, height=dp(40),
+                ))
 
-            btn.bind(on_press=make_handler())
-            content.add_widget(btn)
+            for s in sessions:
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(48), spacing=dp(6))
+
+                btn = Button(
+                    text=fa(s.get("title") or "چت خالی"), font_name="Vazir",
+                    background_color=(0.15, 0.16, 0.19, 1), background_normal="", color=(1, 1, 1, 1),
+                )
+
+                def make_open_handler(sess=s):
+                    def handler(*a):
+                        self.load_session(sess)
+                        popup.dismiss()
+                    return handler
+
+                btn.bind(on_press=make_open_handler())
+
+                del_btn = Button(
+                    text="🗑", size_hint=(None, 1), width=dp(48),
+                    background_color=(0.5, 0.15, 0.15, 1), background_normal="", color=(1, 1, 1, 1),
+                )
+
+                def make_delete_handler(sess=s):
+                    def handler(*a):
+                        self.confirm_delete(sess, refresh)
+                    return handler
+
+                del_btn.bind(on_press=make_delete_handler())
+
+                row.add_widget(btn)
+                row.add_widget(del_btn)
+                content.add_widget(row)
+
+            return content
+
+        def refresh():
+            scroll.clear_widgets()
+            scroll.add_widget(build_list())
+
+        scroll = ScrollView(size_hint=(1, 1))
+        scroll.add_widget(build_list())
 
         popup.content = scroll
         popup.open()
+
+    def confirm_delete(self, session_data, on_deleted):
+        confirm_popup = Popup(
+            title=fa("حذف چت"), title_font="Vazir",
+            size_hint=(0.8, 0.35), separator_color=(0.5, 0.15, 0.15, 1),
+        )
+
+        content = BoxLayout(orientation="vertical", spacing=dp(14), padding=dp(16))
+        content.add_widget(Label(
+            text=fa(f'مطمئنید می‌خواید چت «{session_data.get("title") or "بدون‌عنوان"}» پاک بشه؟'),
+            font_name="Vazir", halign="center",
+        ))
+
+        btn_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(48), spacing=dp(10))
+
+        cancel_btn = Button(
+            text=fa("انصراف"), font_name="Vazir",
+            background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
+        )
+        cancel_btn.bind(on_press=lambda *a: confirm_popup.dismiss())
+
+        delete_btn = Button(
+            text=fa("پاک کن"), font_name="Vazir",
+            background_color=(0.6, 0.15, 0.15, 1), background_normal="", color=(1, 1, 1, 1),
+        )
+
+        def do_delete(*a):
+            self.delete_session(session_data["id"])
+            confirm_popup.dismiss()
+            on_deleted()
+
+        delete_btn.bind(on_press=do_delete)
+
+        btn_row.add_widget(cancel_btn)
+        btn_row.add_widget(delete_btn)
+        content.add_widget(btn_row)
+
+        confirm_popup.content = content
+        confirm_popup.open()
 
     # -----------------------------------------------------------------
     # تنظیمات (سطح پاسخ)
@@ -479,29 +524,22 @@ class ChatApp(App):
         content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(16))
 
         content.add_widget(Label(
-            text=fa("سطح پاسخ‌دهی رو انتخاب کن:"),
-            font_name="Vazir",
-            size_hint_y=None,
-            height=dp(36),
+            text=fa("سطح پاسخ‌دهی رو انتخاب کن:"), font_name="Vazir",
+            size_hint_y=None, height=dp(36),
         ))
 
         popup = Popup(
-            title=fa("تنظیمات"),
-            title_font="Vazir",
-            size_hint=(0.85, 0.5),
-            separator_color=(0.15, 0.45, 0.85, 1),
+            title=fa("تنظیمات"), title_font="Vazir",
+            size_hint=(0.85, 0.5), separator_color=(0.15, 0.45, 0.85, 1),
         )
 
         for level in LEVELS:
             is_active = level == self.response_level
             btn = Button(
-                text=fa(level + (" ✓" if is_active else "")),
-                font_name="Vazir",
-                size_hint_y=None,
-                height=dp(48),
+                text=fa(level + (" ✓" if is_active else "")), font_name="Vazir",
+                size_hint_y=None, height=dp(48),
                 background_color=(0.15, 0.45, 0.85, 1) if is_active else (0.18, 0.19, 0.23, 1),
-                background_normal="",
-                color=(1, 1, 1, 1),
+                background_normal="", color=(1, 1, 1, 1),
             )
 
             def make_handler(lvl=level):
