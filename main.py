@@ -96,7 +96,6 @@ class ChatBubble(BoxLayout):
         self.input.bind(minimum_height=self._sync_height)
         self.add_widget(self.input)
 
-        # ردیف کوچیک دکمه‌ی کپی (پایین حباب)
         copy_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(26))
         self.copy_btn = Button(
             text=fa("کپی"),
@@ -147,7 +146,6 @@ class ChatBubble(BoxLayout):
 
 class ChatApp(App):
 
-    # -----------------------------------------------------------------
     def build(self):
         self.title = "چت‌بات هوش مصنوعی"
 
@@ -193,8 +191,9 @@ class ChatApp(App):
                 inside = ti.collide_point(*ti.to_widget(*touch.pos))
             except Exception:
                 inside = False
-            if not inside and ti.selection_text:
+            if not inside and (ti.selection_text or ti.focus):
                 ti.cancel_selection()
+                ti.focus = False
         return False
 
     def _request_android_permissions(self):
@@ -210,7 +209,6 @@ class ChatApp(App):
     def _full_system_prompt(self):
         return BASE_PROMPT + " " + LEVEL_PROMPTS[self.response_level]
 
-    # -----------------------------------------------------------------
     def _build_header(self):
         header = BoxLayout(size_hint=(1, None), height=dp(56), padding=(dp(10), 0), spacing=dp(6))
         with header.canvas.before:
@@ -248,7 +246,6 @@ class ChatApp(App):
         self.header_rect.pos = instance.pos
         self.header_rect.size = instance.size
 
-    # -----------------------------------------------------------------
     def _build_input_row(self):
         input_row = BoxLayout(orientation="horizontal", size_hint=(1, None), height=dp(52), spacing=dp(6))
 
@@ -305,7 +302,6 @@ class ChatApp(App):
             self.preview_label.text = fa("پیامت رو بنویس...")
             self.preview_label.color = (0.6, 0.6, 0.65, 1)
 
-    # -----------------------------------------------------------------
     def pick_file(self):
         try:
             from plyer import filechooser
@@ -329,7 +325,6 @@ class ChatApp(App):
 
         Clock.schedule_once(do_read)
 
-    # -----------------------------------------------------------------
     def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
         self.messages_box.add_widget(bubble)
@@ -372,7 +367,6 @@ class ChatApp(App):
 
         Clock.schedule_once(finish)
 
-    # -----------------------------------------------------------------
     def _session_path(self, session_id):
         return os.path.join(self.sessions_dir, f"{session_id}.json")
 
@@ -536,7 +530,6 @@ class ChatApp(App):
         confirm_popup.content = content
         confirm_popup.open()
 
-    # -----------------------------------------------------------------
     def load_settings(self):
         try:
             with open(self.settings_file, "r", encoding="utf-8") as f:
@@ -592,7 +585,6 @@ class ChatApp(App):
         popup.content = content
         popup.open()
 
-    # -----------------------------------------------------------------
     def on_pause(self):
         self.save_current_session()
         return True
