@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-چت‌بات هوش مصنوعی - نسخه گرافیکی شیک (Kivy) با پشتیبانی از فونت فارسی
+چت‌بات هوش مصنوعی - نسخه گرافیکی شیک (Kivy) با پشتیبانی از فونت فارسی،
+ذخیره‌سازی خودکار چت و رفع مشکل کیبورد
 """
 
+import os
+import json
 import requests
 import threading
 import arabic_reshaper
@@ -27,6 +30,8 @@ from kivy.graphics import Color, RoundedRectangle
 API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 
+SYSTEM_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی جواب می‌دی."
+
 # رنگ‌بندی
 BG_COLOR = (0.06, 0.07, 0.09, 1)
 USER_BUBBLE_COLOR = (0.15, 0.45, 0.85, 1)
@@ -35,22 +40,20 @@ HEADER_COLOR = (0.1, 0.11, 0.14, 1)
 
 Window.clearcolor = BG_COLOR
 
-# ثبت فونت فارسی (فایل Vazirmatn-Regular.ttf باید کنار main.py باشه)
+# رفع مشکل: کیبورد جلوی کادر تایپ رو نگیره
+Window.softinput_mode = "below_target"
+
+# ثبت فونت فارسی
 LabelBase.register(name="Vazir", fn_regular="Vazirmatn-Regular.ttf")
 
 
 def fa(text):
-    """
-    متن فارسی رو برای نمایش درست توی Kivy آماده می‌کنه:
-    حروف رو به‌هم می‌چسبونه (reshape) و جهت راست‌به‌چپ رو اصلاح می‌کنه (bidi)
-    """
+    """متن فارسی رو برای نمایش درست توی Kivy آماده می‌کنه (چسبوندن حروف + جهت راست‌به‌چپ)"""
     reshaped = arabic_reshaper.reshape(text)
     return get_display(reshaped)
 
 
 class ChatBubble(BoxLayout):
-    """یک حباب پیام با پس‌زمینه رنگی و گوشه‌ی گرد"""
-
     def __init__(self, text, is_user, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
@@ -103,9 +106,11 @@ class ChatApp(App):
 
     def build(self):
         self.title = "چت‌بات هوش مصنوعی"
-        self.conversation_history = [
-            {"role": "system", "content": "تو یک دستیار هوشمند و مفید هستی که به فارسی جواب می‌دی."}
-        ]
+
+        # مسیر فایل ذخیره‌سازی چت (پوشه‌ی مخصوص اپ، همیشه در دسترسه)
+        self.history_file = os.path.join(self.user_data_dir, "chat_history.json")
+
+        self.conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         root = BoxLayout(orientation="vertical")
 
@@ -162,9 +167,14 @@ class ChatApp(App):
 
         root.add_widget(body)
 
-        self.add_bubble("سلام! چطور می‌تونم کمکت کنم؟", is_user=False)
+        # بارگذاری چت قبلی (اگه وجود داشته باشه)
+        self.load_history()
+
+        if not self.messages_box.children:
+            self.add_bubble("سلام! چطور می‌تونم کمکت کنم؟", is_user=False, save=False)
+
         if API_KEY == "اینجا_کلید_API_رو_بذار":
-            self.add_bubble("⚠️ هنوز کلید API رو توی کد نذاشتید!", is_user=False)
+            self.add_bubble("⚠️ هنوز کلید API رو توی کد نذاشتید!", is_user=False, save=False)
 
         return root
 
@@ -172,7 +182,7 @@ class ChatApp(App):
         self.header_rect.pos = instance.pos
         self.header_rect.size = instance.size
 
-    def add_bubble(self, text, is_user):
+    def add_bubble(self, text, is_user, save=True):
         bubble = ChatBubble(text=text, is_user=is_user)
         self.messages_box.add_widget(bubble)
         Clock.schedule_once(lambda dt: setattr(self.scroll, "scroll_y", 0), 0.1)
@@ -197,7 +207,7 @@ class ChatApp(App):
         data = {
             "model": "llama-3.3-70b-versatile",
             "messages": self.conversation_history,
-            "temperature": 0.7,
+            "temperature": 0.3,
             "max_tokens": 1024,
         }
 
@@ -210,7 +220,44 @@ class ChatApp(App):
         except Exception as e:
             reply = f"خطا: {e}"
 
-        Clock.schedule_once(lambda dt: thinking_bubble.set_text(reply))
+        def finish(dt):
+            thinking_bubble.set_text(reply)
+            self.save_history()
+
+        Clock.schedule_once(finish)
+
+    def save_history(self):
+        """ذخیره‌ی کل مکالمه روی حافظه‌ی گوشی"""
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(self.conversation_history, f, ensure_ascii=False)
+        except Exception as e:
+            print("خطا در ذخیره‌سازی چت:", e)
+
+    def load_history(self):
+        """بارگذاری مکالمه‌ی قبلی از حافظه‌ی گوشی (در صورت وجود)"""
+        if not os.path.exists(self.history_file):
+            return
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if saved and isinstance(saved, list):
+                self.conversation_history = saved
+                for msg in saved:
+                    if msg["role"] == "user":
+                        self.add_bubble(msg["content"], is_user=True, save=False)
+                    elif msg["role"] == "assistant":
+                        self.add_bubble(msg["content"], is_user=False, save=False)
+        except Exception as e:
+            print("خطا در بارگذاری چت:", e)
+
+    def on_pause(self):
+        # وقتی کاربر از اپ خارج می‌شه یا اپ پس‌زمینه می‌ره (اندروید)
+        self.save_history()
+        return True
+
+    def on_stop(self):
+        self.save_history()
 
 
 if __name__ == "__main__":
