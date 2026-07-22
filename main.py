@@ -5,7 +5,7 @@
 - چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
 - تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
 - کپی مطمئن پیام‌ها (متن اصلی، نه شکل‌بندی‌شده) + رفع مشکل هایلایت
-- ضمیمه کردن فایل متنی با مرورگر فایل داخلی (بدون plyer)
+- ضمیمه کردن فایل با مدیریت فایل واقعی اندروید: متن/PDF/Word/عکس
 """
 
 import os
@@ -34,6 +34,7 @@ from kivy.graphics import Color, RoundedRectangle
 API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL_NAME = "openai/gpt-oss-120b"
+VISION_MODEL = "qwen/qwen3.6-27b"
 
 BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
 
@@ -153,6 +154,7 @@ class ChatApp(App):
         self.response_level, self.search_enabled, self.thinking_enabled = self.load_settings()
         self.current_session_id = str(int(time.time() * 1000))
         self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
+        self.pending_image = None
 
         self._request_android_permissions()
 
@@ -168,6 +170,11 @@ class ChatApp(App):
         self.messages_box.bind(minimum_height=self.messages_box.setter("height"))
         self.scroll.add_widget(self.messages_box)
         body.add_widget(self.scroll)
+
+        self.attachment_bar = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=0, spacing=dp(6), padding=(dp(6), 0)
+        )
+        body.add_widget(self.attachment_bar)
 
         body.add_widget(self._build_input_row())
         root.add_widget(body)
@@ -298,16 +305,8 @@ class ChatApp(App):
             self.preview_label.text = fa("پیامت رو بنویس...")
             self.preview_label.color = (0.6, 0.6, 0.65, 1)
 
-    # مرورگر فایل داخلی خودمون (بدون تکیه به plyer)
-    STORAGE_ROOT = "/storage/emulated/0/"
-
-    def _start_dir(self):
-        download = os.path.join(self.STORAGE_ROOT, "Download")
-        if os.path.isdir(download):
-            return download
-        if os.path.isdir(self.STORAGE_ROOT):
-            return self.STORAGE_ROOT
-        return os.path.expanduser("~")
+    TEXT_EXTS = (".txt", ".md", ".csv", ".json", ".log")
+    IMAGE_EXTS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
     def _ensure_storage_permission(self):
         try:
@@ -335,103 +334,159 @@ class ChatApp(App):
     def pick_file(self):
         if not self._ensure_storage_permission():
             return
-        self._show_browser_popup(self._start_dir())
-
-    def _show_browser_popup(self, directory):
-        popup = Popup(
-            title=fa("انتخاب فایل متنی (.txt)"), title_font="Vazir",
-            size_hint=(0.92, 0.85), separator_color=(0.15, 0.45, 0.85, 1),
-        )
-        outer = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
-
-        path_label = Label(
-            text=fa(directory), font_name="Vazir", size_hint_y=None, height=dp(30),
-            color=(0.7, 0.7, 0.75, 1), shorten=True, shorten_from="left",
-        )
-        outer.add_widget(path_label)
-
-        scroll = ScrollView(size_hint=(1, 1))
-        listing = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
-        listing.bind(minimum_height=listing.setter("height"))
-        scroll.add_widget(listing)
-        outer.add_widget(scroll)
-
-        cancel_btn = Button(
-            text=fa("انصراف"), font_name="Vazir", size_hint_y=None, height=dp(44),
-            background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
-        )
-        cancel_btn.bind(on_press=lambda *a: popup.dismiss())
-        outer.add_widget(cancel_btn)
-
-        def populate(dir_path):
-            listing.clear_widgets()
-            path_label.text = fa(dir_path)
-
-            normalized = dir_path.rstrip("/")
-            root_normalized = self.STORAGE_ROOT.rstrip("/")
-            if normalized and normalized != root_normalized:
-                parent = os.path.dirname(normalized) or root_normalized
-                up_btn = Button(
-                    text=fa(".. (یک پوشه بالاتر)"), font_name="Vazir", size_hint_y=None, height=dp(42),
-                    background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
-                )
-                up_btn.bind(on_press=lambda *a: populate(parent))
-                listing.add_widget(up_btn)
-
-            try:
-                entries = sorted(os.listdir(dir_path))
-            except Exception as e:
-                listing.add_widget(Label(
-                    text=fa(f"خطا در باز کردن پوشه: {e}"), font_name="Vazir",
-                    size_hint_y=None, height=dp(40),
-                ))
-                return
-
-            folders = [e for e in entries if not e.startswith(".") and os.path.isdir(os.path.join(dir_path, e))]
-            files = [e for e in entries if e.lower().endswith(".txt")]
-
-            for name in folders:
-                full = os.path.join(dir_path, name)
-                b = Button(
-                    text=fa("📁 " + name), font_name="Vazir", size_hint_y=None, height=dp(42),
-                    background_color=(0.15, 0.16, 0.19, 1), background_normal="", color=(1, 1, 1, 1),
-                    halign="right",
-                )
-                b.bind(on_press=lambda inst, f=full: populate(f))
-                listing.add_widget(b)
-
-            for name in files:
-                full = os.path.join(dir_path, name)
-                b = Button(
-                    text=fa("📄 " + name), font_name="Vazir", size_hint_y=None, height=dp(42),
-                    background_color=(0.15, 0.45, 0.85, 1), background_normal="", color=(1, 1, 1, 1),
-                )
-
-                def pick(inst, f=full):
-                    self._load_text_file(f)
-                    popup.dismiss()
-
-                b.bind(on_press=pick)
-                listing.add_widget(b)
-
-            if not folders and not files:
-                listing.add_widget(Label(
-                    text=fa("فایل متنی (.txt) توی این پوشه نیست"), font_name="Vazir",
-                    size_hint_y=None, height=dp(40),
-                ))
-
-        populate(directory)
-        popup.content = outer
-        popup.open()
-
-    def _load_text_file(self, path):
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-            current = self.text_input.text
-            self.text_input.text = (current + "\n" + content).strip() if current else content
+            from jnius import autoclass
+            from android import activity as android_activity
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            self._picker_activity = PythonActivity.mActivity
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("*/*")
+            android_activity.bind(on_activity_result=self._on_activity_result)
+            self._picker_activity.startActivityForResult(intent, 9001)
+        except Exception as e:
+            self.add_bubble(f"امکان باز کردن مدیریت فایل نبود: {e}", is_user=False)
+
+    def _on_activity_result(self, requestCode, resultCode, intent):
+        if requestCode != 9001:
+            return
+        if intent is None:
+            Clock.schedule_once(lambda dt: self.add_bubble("فایلی انتخاب نشد.", is_user=False))
+            return
+        try:
+            uri = intent.getData()
+            if uri is None:
+                Clock.schedule_once(lambda dt: self.add_bubble("فایلی انتخاب نشد.", is_user=False))
+                return
+            Clock.schedule_once(lambda dt: self._handle_picked_uri(uri))
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self.add_bubble(f"خطا در دریافت فایل: {e}", is_user=False))
+
+    def _get_display_name(self, uri):
+        try:
+            from jnius import autoclass
+            OpenableColumns = autoclass("android.provider.OpenableColumns")
+            resolver = self._picker_activity.getContentResolver()
+            cursor = resolver.query(uri, None, None, None, None)
+            name = None
+            if cursor is not None:
+                try:
+                    if cursor.moveToFirst():
+                        idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if idx >= 0:
+                            name = cursor.getString(idx)
+                finally:
+                    cursor.close()
+            return name or "file"
+        except Exception:
+            return "file"
+
+    def _read_uri_bytes(self, uri):
+        from jnius import autoclass
+        resolver = self._picker_activity.getContentResolver()
+        input_stream = resolver.openInputStream(uri)
+        BAOS = autoclass("java.io.ByteArrayOutputStream")
+        ByteClass = autoclass("java.lang.Byte")
+        JArray = autoclass("java.lang.reflect.Array")
+        baos = BAOS()
+        buf = JArray.newInstance(ByteClass.TYPE, 4096)
+        while True:
+            n = input_stream.read(buf)
+            if n == -1:
+                break
+            baos.write(buf, 0, n)
+        input_stream.close()
+        java_bytes = baos.toByteArray()
+        return bytes([(b & 0xFF) for b in java_bytes])
+
+    def _handle_picked_uri(self, uri):
+        try:
+            name = self._get_display_name(uri)
+            ext = os.path.splitext(name)[1].lower()
+            raw = self._read_uri_bytes(uri)
+
+            if ext in self.TEXT_EXTS:
+                content = raw.decode("utf-8", errors="ignore")
+                current = self.text_input.text
+                self.text_input.text = (current + "\n" + content).strip() if current else content
+
+            elif ext == ".pdf":
+                content = self._extract_pdf_text(raw)
+                current = self.text_input.text
+                self.text_input.text = (current + "\n" + content).strip() if current else content
+
+            elif ext == ".docx":
+                content = self._extract_docx_text(raw)
+                current = self.text_input.text
+                self.text_input.text = (current + "\n" + content).strip() if current else content
+
+            elif ext in self.IMAGE_EXTS:
+                import base64
+                b64 = base64.b64encode(raw).decode("ascii")
+                self.pending_image = {"b64": b64, "mime": self.IMAGE_EXTS[ext], "name": name}
+                self._update_attachment_bar()
+
+            else:
+                self.add_bubble(f"فرمت «{ext or 'ناشناخته'}» فعلاً پشتیبانی نمی‌شه.", is_user=False)
+
         except Exception as e:
             self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
+
+    def _extract_pdf_text(self, raw_bytes):
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw_bytes))
+        parts = []
+        for page in reader.pages:
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:
+                continue
+        text = "\n".join(parts).strip()
+        return text or "(متنی از این PDF استخراج نشد — احتمالاً اسکن‌شده‌ست)"
+
+    def _extract_docx_text(self, raw_bytes):
+        import io
+        import zipfile
+        import xml.etree.ElementTree as ET
+
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
+            xml_content = z.read("word/document.xml")
+
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        root = ET.fromstring(xml_content)
+        paragraphs = []
+        for p in root.iter(f"{{{ns['w']}}}p"):
+            texts = [node.text or "" for node in p.iter(f"{{{ns['w']}}}t")]
+            paragraphs.append("".join(texts))
+        return "\n".join(paragraphs).strip() or "(متنی از این فایل Word استخراج نشد)"
+
+    def _update_attachment_bar(self):
+        self.attachment_bar.clear_widgets()
+        if not self.pending_image:
+            self.attachment_bar.height = 0
+            return
+
+        self.attachment_bar.height = dp(34)
+        label = Label(
+            text=fa("📷 " + self.pending_image["name"]), font_name="Vazir", font_size=dp(12),
+            color=(1, 1, 1, 0.9), halign="right", valign="middle", size_hint_x=1,
+        )
+        label.bind(size=lambda *a: setattr(label, "text_size", label.size))
+
+        remove_btn = Button(
+            text="✕", size_hint=(None, 1), width=dp(34),
+            background_color=(0.5, 0.15, 0.15, 1), background_normal="", color=(1, 1, 1, 1),
+        )
+        remove_btn.bind(on_press=lambda *a: self._clear_attachment())
+
+        self.attachment_bar.add_widget(label)
+        self.attachment_bar.add_widget(remove_btn)
+
+    def _clear_attachment(self):
+        self.pending_image = None
+        self._update_attachment_bar()
 
     def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
@@ -441,13 +496,27 @@ class ChatApp(App):
 
     def on_send(self, *args):
         user_text = self.text_input.text.strip()
-        if not user_text:
+        image = self.pending_image
+
+        if not user_text and not image:
             return
+
         self.text_input.text = ""
-        self.add_bubble(user_text, is_user=True)
+        display_text = user_text or "این تصویر رو توضیح بده"
+        if image:
+            display_text = f"📷 {image['name']}\n{display_text}"
+
+        self.add_bubble(display_text, is_user=True)
         thinking_bubble = self.add_bubble("در حال فکر کردن...", is_user=False)
 
-        threading.Thread(target=self.get_ai_response, args=(user_text, thinking_bubble)).start()
+        self._clear_attachment()
+
+        if image:
+            threading.Thread(
+                target=self.get_vision_response, args=(user_text, image, thinking_bubble)
+            ).start()
+        else:
+            threading.Thread(target=self.get_ai_response, args=(user_text, thinking_bubble)).start()
 
     def get_ai_response(self, user_text, thinking_bubble):
         self.conversation_history.append({"role": "user", "content": user_text})
@@ -467,6 +536,41 @@ class ChatApp(App):
 
         try:
             response = requests.post(URL, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            reply = result["choices"][0]["message"]["content"]
+            self.conversation_history.append({"role": "assistant", "content": reply})
+        except Exception as e:
+            reply = f"خطا: {e}"
+
+        def finish(dt):
+            thinking_bubble.set_text(reply)
+            self.save_current_session()
+
+        Clock.schedule_once(finish)
+
+    def get_vision_response(self, user_text, image, thinking_bubble):
+        history_text = (user_text or "این تصویر رو توضیح بده") + " [کاربر یک تصویر هم پیوست کرده بود]"
+        self.conversation_history.append({"role": "user", "content": history_text})
+
+        outgoing_messages = self.conversation_history[:-1] + [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text or "این تصویر رو توضیح بده"},
+                {"type": "image_url", "image_url": {"url": f"data:{image['mime']};base64,{image['b64']}"}},
+            ],
+        }]
+
+        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+        data = {
+            "model": VISION_MODEL,
+            "messages": outgoing_messages,
+            "temperature": 0.3,
+            "max_completion_tokens": 1500,
+        }
+
+        try:
+            response = requests.post(URL, headers=headers, json=data, timeout=45)
             response.raise_for_status()
             result = response.json()
             reply = result["choices"][0]["message"]["content"]
