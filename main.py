@@ -384,7 +384,7 @@ class ChatApp(App):
         if self.thinking_enabled:
             data["reasoning_effort"] = "medium"
         if self.search_enabled:
-            data["tools"] = [{"type": "web_search"}]
+            data["tools"] = [{"type": "browser_search"}]
             data["tool_choice"] = "auto"
 
         try:
