@@ -5,7 +5,7 @@
 - چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
 - تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
 - کپی مطمئن پیام‌ها (متن اصلی، نه شکل‌بندی‌شده) + رفع مشکل هایلایت
-- ضمیمه کردن فایل متنی (نسخه‌ی دیباگی)
+- ضمیمه کردن فایل متنی با مرورگر فایل داخلی (بدون plyer)
 """
 
 import os
@@ -298,58 +298,140 @@ class ChatApp(App):
             self.preview_label.text = fa("پیامت رو بنویس...")
             self.preview_label.color = (0.6, 0.6, 0.65, 1)
 
-    def pick_file(self):
+    # مرورگر فایل داخلی خودمون (بدون تکیه به plyer)
+    STORAGE_ROOT = "/storage/emulated/0/"
+
+    def _start_dir(self):
+        download = os.path.join(self.STORAGE_ROOT, "Download")
+        if os.path.isdir(download):
+            return download
+        if os.path.isdir(self.STORAGE_ROOT):
+            return self.STORAGE_ROOT
+        return os.path.expanduser("~")
+
+    def _ensure_storage_permission(self):
         try:
-            from plyer import filechooser
-            filechooser.open_file(on_selection=self._file_selected)
-        except Exception as e:
-            self.add_bubble(f"امکان باز کردن فایل نبود: {e}", is_user=False)
-
-    def _file_selected(self, selection):
-        Clock.schedule_once(lambda dt: self.add_bubble(f"[دیباگ] مقدار دریافتی: {selection!r}", is_user=False))
-        if not selection or not selection[0]:
-            Clock.schedule_once(lambda dt: self.add_bubble("فایلی انتخاب نشد یا این نوع فایل پشتیبانی نمی‌شه.", is_user=False))
-            return
-        path = selection[0]
-
-        def do_read(dt):
-            try:
-                content = self._read_file_content(path)
-                current = self.text_input.text
-                self.text_input.text = (current + "\n" + content).strip() if current else content
-            except Exception as e:
-                self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
-
-        Clock.schedule_once(do_read)
-
-    def _read_file_content(self, path):
-        if path and os.path.exists(path):
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-
-        if path and str(path).startswith("content://"):
-            try:
-                from jnius import autoclass
+            from jnius import autoclass
+            Environment = autoclass("android.os.Environment")
+            if hasattr(Environment, "isExternalStorageManager") and not Environment.isExternalStorageManager():
+                Intent = autoclass("android.content.Intent")
+                Settings = autoclass("android.provider.Settings")
                 Uri = autoclass("android.net.Uri")
                 PythonActivity = autoclass("org.kivy.android.PythonActivity")
                 activity = PythonActivity.mActivity
-                resolver = activity.getContentResolver()
-                uri = Uri.parse(str(path))
-                input_stream = resolver.openInputStream(uri)
-                BufferedReader = autoclass("java.io.BufferedReader")
-                InputStreamReader = autoclass("java.io.InputStreamReader")
-                reader = BufferedReader(InputStreamReader(input_stream, "UTF-8"))
-                lines = []
-                line = reader.readLine()
-                while line is not None:
-                    lines.append(line)
-                    line = reader.readLine()
-                reader.close()
-                return "\n".join(lines)
-            except Exception as e:
-                raise Exception(f"نتونستم فایل رو از اندروید بخونم ({e})")
+                intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                uri = Uri.parse("package:" + activity.getPackageName())
+                intent.setData(uri)
+                activity.startActivity(intent)
+                self.add_bubble(
+                    "برای پیوست فایل، لطفاً توی صفحه‌ای که باز شد گزینه‌ی «اجازه دسترسی به همه‌ی فایل‌ها» رو فعال کنید، بعد برگردید و دوباره روی + بزنید.",
+                    is_user=False,
+                )
+                return False
+        except Exception:
+            pass
+        return True
 
-        raise Exception("این فایل قابل خوندن نیست. لطفاً یه فایل متنی ساده (.txt) امتحان کنید — عکس یا فایل‌های دیگه فعلاً پشتیبانی نمی‌شن.")
+    def pick_file(self):
+        if not self._ensure_storage_permission():
+            return
+        self._show_browser_popup(self._start_dir())
+
+    def _show_browser_popup(self, directory):
+        popup = Popup(
+            title=fa("انتخاب فایل متنی (.txt)"), title_font="Vazir",
+            size_hint=(0.92, 0.85), separator_color=(0.15, 0.45, 0.85, 1),
+        )
+        outer = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        path_label = Label(
+            text=fa(directory), font_name="Vazir", size_hint_y=None, height=dp(30),
+            color=(0.7, 0.7, 0.75, 1), shorten=True, shorten_from="left",
+        )
+        outer.add_widget(path_label)
+
+        scroll = ScrollView(size_hint=(1, 1))
+        listing = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        listing.bind(minimum_height=listing.setter("height"))
+        scroll.add_widget(listing)
+        outer.add_widget(scroll)
+
+        cancel_btn = Button(
+            text=fa("انصراف"), font_name="Vazir", size_hint_y=None, height=dp(44),
+            background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
+        )
+        cancel_btn.bind(on_press=lambda *a: popup.dismiss())
+        outer.add_widget(cancel_btn)
+
+        def populate(dir_path):
+            listing.clear_widgets()
+            path_label.text = fa(dir_path)
+
+            normalized = dir_path.rstrip("/")
+            root_normalized = self.STORAGE_ROOT.rstrip("/")
+            if normalized and normalized != root_normalized:
+                parent = os.path.dirname(normalized) or root_normalized
+                up_btn = Button(
+                    text=fa(".. (یک پوشه بالاتر)"), font_name="Vazir", size_hint_y=None, height=dp(42),
+                    background_color=(0.18, 0.19, 0.23, 1), background_normal="", color=(1, 1, 1, 1),
+                )
+                up_btn.bind(on_press=lambda *a: populate(parent))
+                listing.add_widget(up_btn)
+
+            try:
+                entries = sorted(os.listdir(dir_path))
+            except Exception as e:
+                listing.add_widget(Label(
+                    text=fa(f"خطا در باز کردن پوشه: {e}"), font_name="Vazir",
+                    size_hint_y=None, height=dp(40),
+                ))
+                return
+
+            folders = [e for e in entries if not e.startswith(".") and os.path.isdir(os.path.join(dir_path, e))]
+            files = [e for e in entries if e.lower().endswith(".txt")]
+
+            for name in folders:
+                full = os.path.join(dir_path, name)
+                b = Button(
+                    text=fa("📁 " + name), font_name="Vazir", size_hint_y=None, height=dp(42),
+                    background_color=(0.15, 0.16, 0.19, 1), background_normal="", color=(1, 1, 1, 1),
+                    halign="right",
+                )
+                b.bind(on_press=lambda inst, f=full: populate(f))
+                listing.add_widget(b)
+
+            for name in files:
+                full = os.path.join(dir_path, name)
+                b = Button(
+                    text=fa("📄 " + name), font_name="Vazir", size_hint_y=None, height=dp(42),
+                    background_color=(0.15, 0.45, 0.85, 1), background_normal="", color=(1, 1, 1, 1),
+                )
+
+                def pick(inst, f=full):
+                    self._load_text_file(f)
+                    popup.dismiss()
+
+                b.bind(on_press=pick)
+                listing.add_widget(b)
+
+            if not folders and not files:
+                listing.add_widget(Label(
+                    text=fa("فایل متنی (.txt) توی این پوشه نیست"), font_name="Vazir",
+                    size_hint_y=None, height=dp(40),
+                ))
+
+        populate(directory)
+        popup.content = outer
+        popup.open()
+
+    def _load_text_file(self, path):
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            current = self.text_input.text
+            self.text_input.text = (current + "\n" + content).strip() if current else content
+        except Exception as e:
+            self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
 
     def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
