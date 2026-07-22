@@ -5,7 +5,7 @@
 - چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
 - تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
 - کپی مطمئن پیام‌ها (متن اصلی، نه شکل‌بندی‌شده) + رفع مشکل هایلایت
-- ضمیمه کردن فایل متنی (با درخواست مجوز دسترسی)
+- ضمیمه کردن فایل متنی (نسخه‌ی دیباگی)
 """
 
 import os
@@ -31,10 +31,6 @@ from kivy.core.clipboard import Clipboard
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 
-# ==========================================
-# کلید API خودتون رو اینجا بذارید
-# از سایت console.groq.com بگیرید
-# ==========================================
 API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL_NAME = "openai/gpt-oss-120b"
@@ -60,7 +56,6 @@ LabelBase.register(name="Vazir", fn_regular="Vazirmatn-Regular.ttf")
 
 
 def fa(text):
-    """متن فارسی رو برای نمایش درست توی Kivy آماده می‌کنه (چسبوندن حروف + جهت راست‌به‌چپ)"""
     try:
         reshaped = arabic_reshaper.reshape(text)
         return get_display(reshaped)
@@ -306,11 +301,12 @@ class ChatApp(App):
     def pick_file(self):
         try:
             from plyer import filechooser
-            filechooser.open_file(on_selection=self._file_selected, filters=[("Text files", "*.txt")])
+            filechooser.open_file(on_selection=self._file_selected)
         except Exception as e:
             self.add_bubble(f"امکان باز کردن فایل نبود: {e}", is_user=False)
 
     def _file_selected(self, selection):
+        Clock.schedule_once(lambda dt: self.add_bubble(f"[دیباگ] مقدار دریافتی: {selection!r}", is_user=False))
         if not selection or not selection[0]:
             Clock.schedule_once(lambda dt: self.add_bubble("فایلی انتخاب نشد یا این نوع فایل پشتیبانی نمی‌شه.", is_user=False))
             return
