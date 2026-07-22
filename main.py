@@ -37,6 +37,7 @@ from kivy.graphics import Color, RoundedRectangle
 # ==========================================
 API_KEY = "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"
 URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "openai/gpt-oss-120b"
 
 BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
 
@@ -75,7 +76,7 @@ class ChatBubble(BoxLayout):
         self.padding = (dp(4), dp(4))
         self.spacing = dp(2)
 
-        self.raw_text = text  # متن اصلی (بدون شکل‌بندی) برای کپی درست
+        self.raw_text = text
         bubble_color = USER_BUBBLE_COLOR if is_user else BOT_BUBBLE_COLOR
 
         self.input = TextInput(
@@ -154,7 +155,7 @@ class ChatApp(App):
         os.makedirs(self.sessions_dir, exist_ok=True)
         self.settings_file = os.path.join(self.data_dir, "settings.json")
 
-        self.response_level = self.load_settings()
+        self.response_level, self.search_enabled, self.thinking_enabled = self.load_settings()
         self.current_session_id = str(int(time.time() * 1000))
         self.conversation_history = [{"role": "system", "content": self._full_system_prompt()}]
 
@@ -305,25 +306,54 @@ class ChatApp(App):
     def pick_file(self):
         try:
             from plyer import filechooser
-            filechooser.open_file(on_selection=self._file_selected)
+            filechooser.open_file(on_selection=self._file_selected, filters=[("Text files", "*.txt")])
         except Exception as e:
             self.add_bubble(f"امکان باز کردن فایل نبود: {e}", is_user=False)
 
     def _file_selected(self, selection):
-        if not selection:
+        if not selection or not selection[0]:
+            Clock.schedule_once(lambda dt: self.add_bubble("فایلی انتخاب نشد یا این نوع فایل پشتیبانی نمی‌شه.", is_user=False))
             return
         path = selection[0]
 
         def do_read(dt):
             try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
+                content = self._read_file_content(path)
                 current = self.text_input.text
                 self.text_input.text = (current + "\n" + content).strip() if current else content
             except Exception as e:
                 self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
 
         Clock.schedule_once(do_read)
+
+    def _read_file_content(self, path):
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        if path and str(path).startswith("content://"):
+            try:
+                from jnius import autoclass
+                Uri = autoclass("android.net.Uri")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                activity = PythonActivity.mActivity
+                resolver = activity.getContentResolver()
+                uri = Uri.parse(str(path))
+                input_stream = resolver.openInputStream(uri)
+                BufferedReader = autoclass("java.io.BufferedReader")
+                InputStreamReader = autoclass("java.io.InputStreamReader")
+                reader = BufferedReader(InputStreamReader(input_stream, "UTF-8"))
+                lines = []
+                line = reader.readLine()
+                while line is not None:
+                    lines.append(line)
+                    line = reader.readLine()
+                reader.close()
+                return "\n".join(lines)
+            except Exception as e:
+                raise Exception(f"نتونستم فایل رو از اندروید بخونم ({e})")
+
+        raise Exception("این فایل قابل خوندن نیست. لطفاً یه فایل متنی ساده (.txt) امتحان کنید — عکس یا فایل‌های دیگه فعلاً پشتیبانی نمی‌شن.")
 
     def add_bubble(self, text, is_user):
         bubble = ChatBubble(text=text, is_user=is_user)
@@ -346,11 +376,16 @@ class ChatApp(App):
 
         headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
         data = {
-            "model": "llama-3.3-70b-versatile",
+            "model": MODEL_NAME,
             "messages": self.conversation_history,
-            "temperature": 0.2,
-            "max_tokens": 1500,
+            "temperature": 0.3,
+            "max_completion_tokens": 1500,
         }
+        if self.thinking_enabled:
+            data["reasoning_effort"] = "medium"
+        if self.search_enabled:
+            data["tools"] = [{"type": "web_search"}]
+            data["tool_choice"] = "auto"
 
         try:
             response = requests.post(URL, headers=headers, json=data, timeout=30)
@@ -531,20 +566,28 @@ class ChatApp(App):
         confirm_popup.open()
 
     def load_settings(self):
+        level, search_enabled, thinking_enabled = "نیمه‌تخصصی", True, False
         try:
             with open(self.settings_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            level = data.get("level")
-            if level in LEVELS:
-                return level
+            if data.get("level") in LEVELS:
+                level = data["level"]
+            if "search_enabled" in data:
+                search_enabled = bool(data["search_enabled"])
+            if "thinking_enabled" in data:
+                thinking_enabled = bool(data["thinking_enabled"])
         except Exception:
             pass
-        return "نیمه‌تخصصی"
+        return level, search_enabled, thinking_enabled
 
     def save_settings(self):
         try:
             with open(self.settings_file, "w", encoding="utf-8") as f:
-                json.dump({"level": self.response_level}, f, ensure_ascii=False)
+                json.dump({
+                    "level": self.response_level,
+                    "search_enabled": self.search_enabled,
+                    "thinking_enabled": self.thinking_enabled,
+                }, f, ensure_ascii=False)
         except Exception as e:
             print("خطا در ذخیره‌ی تنظیمات:", e)
 
@@ -558,17 +601,24 @@ class ChatApp(App):
 
         popup = Popup(
             title=fa("تنظیمات"), title_font="Vazir",
-            size_hint=(0.85, 0.5), separator_color=(0.15, 0.45, 0.85, 1),
+            size_hint=(0.85, 0.75), separator_color=(0.15, 0.45, 0.85, 1),
         )
 
+        level_buttons = {}
+
+        def refresh_level_buttons():
+            for lvl, b in level_buttons.items():
+                active = lvl == self.response_level
+                b.text = fa(lvl + (" ✓" if active else ""))
+                b.background_color = (0.15, 0.45, 0.85, 1) if active else (0.18, 0.19, 0.23, 1)
+
         for level in LEVELS:
-            is_active = level == self.response_level
             btn = Button(
-                text=fa(level + (" ✓" if is_active else "")), font_name="Vazir",
+                font_name="Vazir",
                 size_hint_y=None, height=dp(48),
-                background_color=(0.15, 0.45, 0.85, 1) if is_active else (0.18, 0.19, 0.23, 1),
                 background_normal="", color=(1, 1, 1, 1),
             )
+            level_buttons[level] = btn
 
             def make_handler(lvl=level):
                 def handler(*a):
@@ -576,11 +626,46 @@ class ChatApp(App):
                     self.save_settings()
                     if self.conversation_history and self.conversation_history[0]["role"] == "system":
                         self.conversation_history[0]["content"] = self._full_system_prompt()
-                    popup.dismiss()
+                    refresh_level_buttons()
                 return handler
 
             btn.bind(on_press=make_handler())
             content.add_widget(btn)
+
+        refresh_level_buttons()
+
+        content.add_widget(Label(
+            text=fa("قابلیت‌های اضافه:"), font_name="Vazir",
+            size_hint_y=None, height=dp(36),
+        ))
+
+        search_btn = Button(font_name="Vazir", size_hint_y=None, height=dp(48),
+                             background_normal="", color=(1, 1, 1, 1))
+        thinking_btn = Button(font_name="Vazir", size_hint_y=None, height=dp(48),
+                               background_normal="", color=(1, 1, 1, 1))
+
+        def refresh_toggle(btn, is_on, label_text):
+            btn.text = fa(("☑ " if is_on else "☐ ") + label_text)
+            btn.background_color = (0.15, 0.45, 0.85, 1) if is_on else (0.18, 0.19, 0.23, 1)
+
+        def toggle_search(*a):
+            self.search_enabled = not self.search_enabled
+            self.save_settings()
+            refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (اطلاعات به‌روز از اینترنت)")
+
+        def toggle_thinking(*a):
+            self.thinking_enabled = not self.thinking_enabled
+            self.save_settings()
+            refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (پاسخ عمیق‌تر ولی کندتر)")
+
+        search_btn.bind(on_press=toggle_search)
+        thinking_btn.bind(on_press=toggle_thinking)
+
+        refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (اطلاعات به‌روز از اینترنت)")
+        refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (پاسخ عمیق‌تر ولی کندتر)")
+
+        content.add_widget(search_btn)
+        content.add_widget(thinking_btn)
 
         popup.content = content
         popup.open()
