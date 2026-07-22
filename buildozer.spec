@@ -8,7 +8,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf
 
 version = 1.0
 
-requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer,arabic_reshaper,python-bidi
+requirements = python3,kivy,requests,urllib3,certifi,idna,charset_normalizer,arabic_reshaper,python-bidi,pypdf
 
 orientation = portrait
 fullscreen = 0
