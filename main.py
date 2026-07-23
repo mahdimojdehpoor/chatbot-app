@@ -36,7 +36,12 @@ URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL_NAME = "openai/gpt-oss-120b"
 VISION_MODEL = "qwen/qwen3.6-27b"
 
-BASE_PROMPT = "تو یک دستیار هوشمند و مفید هستی که به فارسی پاسخ می‌دی. همیشه پاسخ‌های دقیق، منسجم و منطقی بده."
+BASE_PROMPT = (
+    "تو یک دستیار هوشمند و مفید هستی که فقط و فقط به فارسیِ روان و طبیعی پاسخ می‌دی. "
+    "همیشه از دستور زبان و ترتیب طبیعیِ کلمات در جمله‌ی فارسی استفاده کن؛ جمله‌هات باید دقیقاً مثل یک فارسی‌زبان بومی نوشته بشه، "
+    "نه شبیه ترجمه‌ی کلمه‌به‌کلمه از انگلیسی (مثلاً بگو «من تو را دوست دارم»، نه «من دوست دارم تو را»). "
+    "پاسخ‌هات باید دقیق، منسجم و منطقی باشه."
+)
 
 LEVEL_PROMPTS = {
     "عمومی": "پاسخ‌هات رو ساده، روان و قابل فهم برای یک فرد عادی بده. از اصطلاحات تخصصی و پیچیده پرهیز کن.",
@@ -157,6 +162,7 @@ class ChatApp(App):
         self.pending_image = None
 
         self._request_android_permissions()
+        self._bind_activity_result_once()
 
         root = BoxLayout(orientation="vertical")
         root.add_widget(self._build_header())
@@ -206,6 +212,13 @@ class ChatApp(App):
                 Permission.READ_EXTERNAL_STORAGE,
                 Permission.WRITE_EXTERNAL_STORAGE,
             ])
+        except Exception:
+            pass
+
+    def _bind_activity_result_once(self):
+        try:
+            from android import activity as android_activity
+            android_activity.bind(on_activity_result=self._on_activity_result)
         except Exception:
             pass
 
@@ -336,14 +349,12 @@ class ChatApp(App):
             return
         try:
             from jnius import autoclass
-            from android import activity as android_activity
             Intent = autoclass("android.content.Intent")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             self._picker_activity = PythonActivity.mActivity
             intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
             intent.setType("*/*")
-            android_activity.bind(on_activity_result=self._on_activity_result)
             self._picker_activity.startActivityForResult(intent, 9001)
         except Exception as e:
             self.add_bubble(f"امکان باز کردن مدیریت فایل نبود: {e}", is_user=False)
