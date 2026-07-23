@@ -393,23 +393,42 @@ class ChatApp(App):
         except Exception:
             return "file"
 
+    def _resolve_real_path(self, uri):
+        try:
+            from jnius import autoclass
+            DocumentsContract = autoclass("android.provider.DocumentsContract")
+            authority = uri.getAuthority()
+            if authority == "com.android.externalstorage.documents":
+                doc_id = DocumentsContract.getDocumentId(uri)
+                parts = str(doc_id).split(":", 1)
+                if len(parts) == 2 and parts[0] == "primary":
+                    candidate = os.path.join("/storage/emulated/0/", parts[1])
+                    if os.path.exists(candidate):
+                        return candidate
+        except Exception:
+            pass
+        return None
+
     def _read_uri_bytes(self, uri):
+        real_path = self._resolve_real_path(uri)
+        if real_path:
+            with open(real_path, "rb") as f:
+                return f.read()
+
         from jnius import autoclass
         resolver = self._picker_activity.getContentResolver()
         input_stream = resolver.openInputStream(uri)
-        BAOS = autoclass("java.io.ByteArrayOutputStream")
-        ByteClass = autoclass("java.lang.Byte")
-        JArray = autoclass("java.lang.reflect.Array")
-        baos = BAOS()
-        buf = JArray.newInstance(ByteClass.TYPE, 4096)
+        if input_stream is None:
+            raise Exception("این فایل قابل باز شدن نبود (جریان خالی)")
+
+        chunks = bytearray()
         while True:
-            n = input_stream.read(buf)
-            if n == -1:
+            b = input_stream.read()
+            if b == -1:
                 break
-            baos.write(buf, 0, n)
+            chunks.append(b & 0xFF)
         input_stream.close()
-        java_bytes = baos.toByteArray()
-        return bytes([(b & 0xFF) for b in java_bytes])
+        return bytes(chunks)
 
     def _handle_picked_uri(self, uri):
         try:
@@ -442,7 +461,7 @@ class ChatApp(App):
                 self.add_bubble(f"فرمت «{ext or 'ناشناخته'}» فعلاً پشتیبانی نمی‌شه.", is_user=False)
 
         except Exception as e:
-            self.add_bubble(f"خطا در خوندن فایل: {e}", is_user=False)
+            self.add_bubble(f"خطا در خوندن فایل ({type(e).__name__}): {e}", is_user=False)
 
     def _extract_pdf_text(self, raw_bytes):
         import io
@@ -529,26 +548,37 @@ class ChatApp(App):
         else:
             threading.Thread(target=self.get_ai_response, args=(user_text, thinking_bubble)).start()
 
+    def _call_groq(self, data, timeout=30):
+        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+        response = requests.post(URL, headers=headers, json=data, timeout=timeout)
+        if response.status_code != 200:
+            try:
+                err = response.json()
+                msg = err.get("error", {}).get("message", response.text)
+            except Exception:
+                msg = response.text
+            raise Exception(f"{response.status_code} - {msg}")
+        return response.json()
+
     def get_ai_response(self, user_text, thinking_bubble):
         self.conversation_history.append({"role": "user", "content": user_text})
 
-        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+        use_gpt_oss = self.search_enabled or self.thinking_enabled
         data = {
-            "model": MODEL_NAME,
+            "model": MODEL_NAME if use_gpt_oss else VISION_MODEL,
             "messages": self.conversation_history,
             "temperature": 0.3,
             "max_completion_tokens": 1500,
         }
-        if self.thinking_enabled:
-            data["reasoning_effort"] = "medium"
-        if self.search_enabled:
-            data["tools"] = [{"type": "browser_search"}]
-            data["tool_choice"] = "auto"
+        if use_gpt_oss:
+            if self.thinking_enabled:
+                data["reasoning_effort"] = "medium"
+            if self.search_enabled:
+                data["tools"] = [{"type": "browser_search"}]
+                data["tool_choice"] = "auto"
 
         try:
-            response = requests.post(URL, headers=headers, json=data, timeout=30)
-            response.raise_for_status()
-            result = response.json()
+            result = self._call_groq(data, timeout=30)
             reply = result["choices"][0]["message"]["content"]
             self.conversation_history.append({"role": "assistant", "content": reply})
         except Exception as e:
@@ -572,7 +602,6 @@ class ChatApp(App):
             ],
         }]
 
-        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
         data = {
             "model": VISION_MODEL,
             "messages": outgoing_messages,
@@ -581,9 +610,7 @@ class ChatApp(App):
         }
 
         try:
-            response = requests.post(URL, headers=headers, json=data, timeout=45)
-            response.raise_for_status()
-            result = response.json()
+            result = self._call_groq(data, timeout=45)
             reply = result["choices"][0]["message"]["content"]
             self.conversation_history.append({"role": "assistant", "content": reply})
         except Exception as e:
