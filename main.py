@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-چت‌بات هوش مصنوعی - نسخه‌ی کامل با:
-- فونت و نمایش درست فارسی
-- چت‌های جداگانه (مثل ChatGPT) + تاریخچه + حذف چت
-- تنظیم سطح پاسخ (عمومی / نیمه‌تخصصی / تخصصی)
-- کپی مطمئن پیام‌ها (متن اصلی، نه شکل‌بندی‌شده) + رفع مشکل هایلایت
-- ضمیمه کردن فایل با مدیریت فایل واقعی اندروید: متن/PDF/Word/عکس
+چت‌بات هوش مصنوعی - نسخه‌ی کامل
 """
 
 import os
@@ -31,7 +26,7 @@ from kivy.core.clipboard import Clipboard
 from kivy.metrics import dp
 from kivy.graphics import Color, RoundedRectangle
 
-API_KEY = "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"
+API_KEY = "PLACEHOLDER_API_KEY"
 URL = "https://api.groq.com/openai/v1/chat/completions"
 MODEL_NAME = "openai/gpt-oss-120b"
 VISION_MODEL = "qwen/qwen3.6-27b"
@@ -44,11 +39,24 @@ BASE_PROMPT = (
 )
 
 LEVEL_PROMPTS = {
-    "عمومی": "پاسخ‌هات رو ساده، روان و قابل فهم برای یک فرد عادی بده. از اصطلاحات تخصصی و پیچیده پرهیز کن.",
-    "نیمه‌تخصصی": "پاسخ‌هات رو با جزئیات متوسط بده و از اصطلاحات تخصصی رایج استفاده کن، ولی همچنان قابل فهم باشه.",
-    "تخصصی": "پاسخ‌هات رو کامل، دقیق و با عمق فنی/آکادمیک بده و از اصطلاحات تخصصی دقیق استفاده کن.",
+    "عمومی": "توضیحت رو ساده و روان بده، همراه با یه مثال ملموس و قابل فهم، و از اصطلاحات تخصصی و پیچیده پرهیز کن — انگار داری برای یه فرد عادی توضیح می‌دی.",
+    "نیمه‌تخصصی": "توضیحت باید هم‌زمان دو ویژگی داشته باشه: هم با مثال ملموس همراه باشه، هم از اصطلاحات و لحن آکادمیک/تخصصیِ رایج استفاده کنه — یعنی ترکیبی از فهم‌پذیری و دقت علمی.",
+    "تخصصی": "توضیحت رو کاملاً آکادمیک، دقیق و با عمق فنی بده، با اصطلاحات تخصصی دقیق، بدون نیاز به ساده‌سازی برای غیرمتخصص.",
 }
 LEVELS = ["عمومی", "نیمه‌تخصصی", "تخصصی"]
+
+SEARCH_ONLY_INSTRUCTION = (
+    "برای این پرسش، حتماً با ابزار جستجوی وب، مقاله‌ها و منابع موجود درباره‌ی موضوع رو پیدا کن. "
+    "فقط چیزی که واقعاً توی منابع هست رو خلاصه و گزارش کن (مثل یه مرور منابع)؛ از خودت نظریه یا فرضیه‌ی جدید نساز و از جمع‌بندیِ شخصی پرهیز کن."
+)
+
+THINKING_INSTRUCTION = (
+    "برای این پرسش، از ابزار جستجوی وب استفاده کن و پاسخت رو دقیقاً در دو بخش جدا بنویس:\n\n"
+    "بخش ۱ - «منابع و مقالات یافته‌شده»: چیزی که توی جستجو و منابع واقعی پیدا کردی رو اینجا خلاصه و فهرست کن (مثل حالت جستجوی معمولی، بدون نظریه‌پردازی).\n\n"
+    "بخش ۲ - «تحلیل و فرضیه‌پردازی علمی»: طبق روش علمیِ فرضیه‌سازی (۱- جمع‌آوری داده، ۲- ساماندهیِ داده‌ها، ۳- کشف رابطه و نتیجه‌گیری)، "
+    "بین یافته‌های بخش ۱ ارتباط برقرار کن و در صورت لزوم فرضیه‌های علمیِ جدید، منطقی و قابل آزمون مطرح کن، حتی اگه مستقیماً توی منابع نیومده باشه. "
+    "این بخش رو واضح از بخش اول جدا نگه دار تا معلوم باشه کدوم بخش مستند به منبعه و کدوم بخش استنتاج/فرضیه‌ی خودته."
+)
 
 BG_COLOR = (0.06, 0.07, 0.09, 1)
 USER_BUBBLE_COLOR = (0.15, 0.45, 0.85, 1)
@@ -563,22 +571,34 @@ class ChatApp(App):
     def get_ai_response(self, user_text, thinking_bubble):
         self.conversation_history.append({"role": "user", "content": user_text})
 
-        use_gpt_oss = self.search_enabled or self.thinking_enabled
+        use_search_tool = self.search_enabled or self.thinking_enabled
+        use_gpt_oss = use_search_tool
+
+        system_content = self._full_system_prompt()
+        if self.thinking_enabled:
+            system_content += "\n\n" + THINKING_INSTRUCTION
+        elif self.search_enabled:
+            system_content += "\n\n" + SEARCH_ONLY_INSTRUCTION
+
+        outgoing_messages = list(self.conversation_history)
+        if outgoing_messages and outgoing_messages[0]["role"] == "system":
+            outgoing_messages[0] = {"role": "system", "content": system_content}
+
         data = {
             "model": MODEL_NAME if use_gpt_oss else VISION_MODEL,
-            "messages": self.conversation_history,
+            "messages": outgoing_messages,
             "temperature": 0.3,
-            "max_completion_tokens": 1500,
+            "max_completion_tokens": 2000,
         }
         if use_gpt_oss:
             if self.thinking_enabled:
-                data["reasoning_effort"] = "medium"
-            if self.search_enabled:
+                data["reasoning_effort"] = "high"
+            if use_search_tool:
                 data["tools"] = [{"type": "browser_search"}]
                 data["tool_choice"] = "auto"
 
         try:
-            result = self._call_groq(data, timeout=30)
+            result = self._call_groq(data, timeout=45)
             reply = result["choices"][0]["message"]["content"]
             self.conversation_history.append({"role": "assistant", "content": reply})
         except Exception as e:
@@ -871,18 +891,18 @@ class ChatApp(App):
         def toggle_search(*a):
             self.search_enabled = not self.search_enabled
             self.save_settings()
-            refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (اطلاعات به‌روز از اینترنت)")
+            refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (فقط منابع و مقالات موجود)")
 
         def toggle_thinking(*a):
             self.thinking_enabled = not self.thinking_enabled
             self.save_settings()
-            refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (پاسخ عمیق‌تر ولی کندتر)")
+            refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (جستجو + فرضیه‌پردازی علمی)")
 
         search_btn.bind(on_press=toggle_search)
         thinking_btn.bind(on_press=toggle_thinking)
 
-        refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (اطلاعات به‌روز از اینترنت)")
-        refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (پاسخ عمیق‌تر ولی کندتر)")
+        refresh_toggle(search_btn, self.search_enabled, "حالت جستجو (فقط منابع و مقالات موجود)")
+        refresh_toggle(thinking_btn, self.thinking_enabled, "حالت تفکر (جستجو + فرضیه‌پردازی علمی)")
 
         content.add_widget(search_btn)
         content.add_widget(thinking_btn)
